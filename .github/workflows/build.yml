@@ -1,0 +1,73 @@
+name: Build Package
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-14
+
+    strategy:
+      fail-fast: false
+      matrix:
+        scheme:
+          - rootless
+          - roothide
+
+    env:
+      THEOS: ${{ github.workspace }}/theos
+      FINALPACKAGE: 1
+      THEOS_PACKAGE_SCHEME: ${{ matrix.scheme }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install build dependencies
+        run: |
+          brew update
+          brew install make dpkg ldid xz
+          echo "$(brew --prefix make)/libexec/gnubin" >> "$GITHUB_PATH"
+
+      - name: Set up RootHide Theos
+        run: |
+          git clone --recursive https://github.com/roothide/theos.git "$THEOS"
+          mkdir -p "$THEOS/sdks"
+          curl -L https://github.com/theos/sdks/archive/refs/heads/master.tar.gz \
+            | tar -xz -C "$THEOS/sdks" --strip-components=1
+
+      - name: Install CCSupport headers
+        run: |
+          set -euo pipefail
+          git clone --depth 1 https://github.com/opa334/CCSupportTemplates.git /tmp/CCSupportTemplates
+          cp -R /tmp/CCSupportTemplates/Headers/ControlCenterUI "$THEOS/include/"
+          cp -R /tmp/CCSupportTemplates/Headers/ControlCenterUIKit "$THEOS/include/"
+          cp -R /tmp/CCSupportTemplates/Headers/ControlCenterServices "$THEOS/include/"
+
+      - name: Build and install AltList for ${{ matrix.scheme }}
+        run: |
+          set -euo pipefail
+          git clone --recursive https://github.com/opa334/AltList.git /tmp/AltList
+          cd /tmp/AltList
+          make clean
+          make FINALPACKAGE=1 THEOS_PACKAGE_SCHEME="$THEOS_PACKAGE_SCHEME"
+          mkdir -p "$THEOS/lib/iphone/$THEOS_PACKAGE_SCHEME"
+          cp -Rv "./.theos/obj/AltList.framework" "$THEOS/lib/iphone/$THEOS_PACKAGE_SCHEME/"
+
+      - name: Build ${{ matrix.scheme }} package
+        run: |
+          make --version
+          echo "THEOS_PACKAGE_SCHEME=$THEOS_PACKAGE_SCHEME"
+          make clean package
+
+      - name: Upload ${{ matrix.scheme }} package
+        uses: actions/upload-artifact@v4
+        with:
+          name: packages-${{ matrix.scheme }}
+          path: packages/*.deb
+          if-no-files-found: error
